@@ -20,6 +20,7 @@ local camera      = workspace.CurrentCamera
 -- ─────────────────────────────────────────────
 local TOGGLE_KEY  = Enum.KeyCode.H   -- press H to show/hide the UI
 local RESET_KEY   = Enum.KeyCode.R   -- press R to disable all toggles (natural view)
+local KILL_KEY    = Enum.KeyCode.M   -- press M × 3 quickly to fully destroy the script
 
 local cfg = {
     highlightsEnabled   = true,
@@ -545,27 +546,7 @@ local function toggleWindowVisible()
     end
 end
 
--- Reset all toggles to OFF (natural view) — called by RESET_KEY
--- setCamToggleState / setHighlightsToggle etc. are defined after GUI build,
--- so we store a thunk and call it once the GUI exists.
-local pendingResetBind = nil
-
-local function resetAllToggles()
-    setHighlights(false);    if setHighlightsToggle then setHighlightsToggle(false) end
-    setNameTags(false);      if setNameTagsToggle   then setNameTagsToggle(false)   end
-    setAmbient(false);       if setAmbientToggle    then setAmbientToggle(false)    end
-    stopSpectate();          if setCamToggleState   then setCamToggleState(false)   end
-end
-
--- Keyboard toggle
-UserInputService.InputBegan:Connect(function(inp, processed)
-    if processed then return end
-    if inp.KeyCode == TOGGLE_KEY then
-        toggleWindowVisible()
-    elseif inp.KeyCode == RESET_KEY then
-        resetAllToggles()
-    end
-end)
+-- (keyboard bindings wired at the bottom after all GUI setters are defined)
 
 -- Minimise button (collapses body, keeps title visible)
 local bodyCollapsed = false
@@ -823,12 +804,16 @@ end
 -- ═══════════════════════════════════════════════
 --  Build UI sections
 -- ═══════════════════════════════════════════════
+
+-- Pill-setter upvalues — assigned during build, used by resetAllToggles below
+local setHighlightsPill, setNameTagsPill, setAmbientPill, setCamPill
+
 local order = 1
 
 sectionLabel("  VISUALS", order);               order += 1
-local _, setHighlightsToggle = makeToggle("Player Highlights", order, cfg.highlightsEnabled, setHighlights); order += 1
-local _, setNameTagsToggle   = makeToggle("Name Tags",         order, cfg.nameTagsEnabled,   setNameTags);   order += 1
-local _, setAmbientToggle    = makeToggle("Ambient Light",     order, cfg.ambientEnabled,    setAmbient);    order += 1
+local _, _setHL = makeToggle("Player Highlights", order, cfg.highlightsEnabled, setHighlights); setHighlightsPill = _setHL; order += 1
+local _, _setNT = makeToggle("Name Tags",         order, cfg.nameTagsEnabled,   setNameTags);   setNameTagsPill   = _setNT; order += 1
+local _, _setAM = makeToggle("Ambient Light",     order, cfg.ambientEnabled,    setAmbient);    setAmbientPill    = _setAM; order += 1
 divider(order);                                  order += 1
 
 sectionLabel("  TRANSPARENCY", order);           order += 1
@@ -870,9 +855,9 @@ end); order += 1
 divider(order); order += 1
 
 sectionLabel("  CAMERA MODE", order); order += 1
-local _, setCamToggleState = makeToggle("Camera Spectate", order, false, function(state)
+local _, _setCam = makeToggle("Camera Spectate", order, false, function(state)
     if state then toggleSpectate() else stopSpectate() end
-end); order += 1
+end); setCamPill = _setCam; order += 1
 
 -- Nav row (prev / next / target label)
 do
@@ -922,11 +907,11 @@ do
     end
 
     prevBtn.MouseButton1Click:Connect(function()
-        if not spectating then setCamToggleState(true) end
+        if not spectating then setCamPill(true) end
         spectatePrev(); syncLabel()
     end)
     nextBtn.MouseButton1Click:Connect(function()
-        if not spectating then setCamToggleState(true) end
+        if not spectating then setCamPill(true) end
         spectateNext(); syncLabel()
     end)
 
@@ -949,7 +934,7 @@ do
     local hint = Instance.new("TextLabel")
     hint.Size             = UDim2.new(1, 0, 0, 24)
     hint.BackgroundTransparency = 1
-    hint.Text             = "[H] hide/show   [R] reset all"
+    hint.Text             = "[H] hide/show   [R] reset   [M×3] kill"
     hint.TextColor3       = TEXT_LO
     hint.Font             = Enum.Font.Gotham
     hint.TextSize         = 11
@@ -957,3 +942,64 @@ do
     hint.Parent           = body
     order += 1
 end
+
+-- ═══════════════════════════════════════════════
+--  Keyboard bindings (must be AFTER all pill
+--  setters are assigned above)
+-- ═══════════════════════════════════════════════
+
+local function resetAllToggles()
+    setHighlights(false);  setHighlightsPill(false)
+    setNameTags(false);    setNameTagsPill(false)
+    setAmbient(false);     setAmbientPill(false)
+    stopSpectate();        setCamPill(false)
+end
+
+-- Kill key: press KILL_KEY 3 times within 1 second
+local killPresses = 0
+local killTimer   = 0
+
+local function destroyAll()
+    -- restore lighting first
+    setAmbient(false)
+    stopSpectate()
+    -- destroy all highlights and name tags
+    for hl in pairs(trackedHighlights) do
+        if hl and hl.Parent then hl:Destroy() end
+    end
+    for bb in pairs(trackedBillboards) do
+        if bb and bb.Parent then bb:Destroy() end
+    end
+    -- destroy the GUI
+    gui:Destroy()
+    -- stop the script's connections by destroying the script itself
+    script:Destroy()
+end
+
+RunService.Heartbeat:Connect(function(dt)
+    if killPresses > 0 then
+        killTimer = killTimer + dt
+        if killTimer > 1 then
+            killPresses = 0
+            killTimer   = 0
+        end
+    end
+end)
+
+UserInputService.InputBegan:Connect(function(inp, processed)
+    if processed then return end
+
+    if inp.KeyCode == TOGGLE_KEY then
+        toggleWindowVisible()
+
+    elseif inp.KeyCode == RESET_KEY then
+        resetAllToggles()
+
+    elseif inp.KeyCode == KILL_KEY then
+        killPresses = killPresses + 1
+        killTimer   = 0
+        if killPresses >= 3 then
+            destroyAll()
+        end
+    end
+end)
